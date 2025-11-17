@@ -1,0 +1,4 @@
+files/persistant/*
+!files/persistant/.gitkeep
+files/user_data/*
+!files/user_data/.gitkeep
