@@ -42,7 +42,6 @@ def fetch_par_polygon(geom, start_date="2017-01-01", end_date=None):
   df = pd.DataFrame({"date": parsed_dates, "PAR": par_values})
   return df
 
-
 def build_crop_timeseries(crop_data, default_crop_name="Grass", min_days=1):
   
   events = defaultdict(list)  # date -> list of ("plant"/"harvest", crop)
@@ -147,4 +146,9 @@ def multiply_ds_by_daily_df(ds, df, column_name):
     )
 
     # Multiply all variables in the dataset
-    return ds * factors
+    out_ds = ds * factors
+
+    # Xarray drops attributes by default (why would it not ...) We need to add it back in.
+    out_ds.attrs = ds.attrs.copy()
+
+    return out_ds

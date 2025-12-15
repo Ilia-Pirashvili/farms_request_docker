@@ -1,10 +1,57 @@
 Start of log
-crop_data_ts:
-        date   crop_name  ...  froot_mr_base  livewood_mr_base
-0 2019-07-01  kartoffeln  ...        0.00819               0.0
-1 2019-07-02  kartoffeln  ...        0.00819               0.0
-2 2019-07-03  kartoffeln  ...        0.00819               0.0
-3 2019-07-04  kartoffeln  ...        0.00819               0.0
+fapar_full_ds__1:
+<xarray.Dataset> Size: 14kB
+Dimensions:       (time: 4, y: 26, x: 16)
+Coordinates:
+  * y             (y) float64 208B 5.74e+06 5.74e+06 ... 5.74e+06 5.74e+06
+  * x             (x) float64 128B 6.623e+05 6.623e+05 ... 6.624e+05 6.624e+05
+  * time          (time) datetime64[ns] 32B 2019-07-01T10:20:29 ... 2019-07-0...
+Data variables:
+    BIOPAR_fAPAR  (time, y, x) float64 13kB nan nan nan nan ... nan nan nan nan
+Attributes:
+    crs:           EPSG:32632
+    no_data_time:  ['2019-07-02', '2019-07-03', '2019-07-05', '2019-07-06', '...
 
-[4 rows x 14 columns]
+starting
+fapar_full_ds__2:
+<xarray.Dataset> Size: 14kB
+Dimensions:       (y: 26, x: 16, time: 4)
+Coordinates:
+  * y             (y) float64 208B 5.74e+06 5.74e+06 ... 5.74e+06 5.74e+06
+  * x             (x) float64 128B 6.623e+05 6.623e+05 ... 6.624e+05 6.624e+05
+  * time          (time) datetime64[ns] 32B 2019-07-01T10:20:29 ... 2019-07-0...
+Data variables:
+    BIOPAR_fAPAR  (time, y, x) float64 13kB nan nan nan nan ... nan nan nan nan
+Attributes:
+    crs:           EPSG:32632
+    no_data_time:  ['2019-07-02', '2019-07-03', '2019-07-05', '2019-07-06', '...
 
+ending
+starting
+photosynthesis_xr_ds:
+<xarray.Dataset> Size: 14kB
+Dimensions:  (y: 26, x: 16, time: 4)
+Coordinates:
+  * y        (y) float64 208B 5.74e+06 5.74e+06 5.74e+06 ... 5.74e+06 5.74e+06
+  * x        (x) float64 128B 6.623e+05 6.623e+05 ... 6.624e+05 6.624e+05
+  * time     (time) datetime64[ns] 32B 2019-07-01T10:20:29 ... 2019-07-04T10:...
+Data variables:
+    GPP      (time, y, x) float64 13kB nan nan nan nan nan ... nan nan nan nan
+Attributes:
+    crs:           EPSG:32632
+    no_data_time:  ['2019-07-02', '2019-07-03', '2019-07-05', '2019-07-06', '...
+
+photosynthesis_dc['full']:
+<xarray.Dataset> Size: 14kB
+Dimensions:  (y: 26, x: 16, time: 4)
+Coordinates:
+  * y        (y) float64 208B 5.74e+06 5.74e+06 5.74e+06 ... 5.74e+06 5.74e+06
+  * x        (x) float64 128B 6.623e+05 6.623e+05 ... 6.624e+05 6.624e+05
+  * time     (time) datetime64[ns] 32B 2019-07-01T10:20:29 ... 2019-07-04T10:...
+Data variables:
+    GPP      (time, y, x) float64 13kB nan nan nan nan nan ... nan nan nan nan
+Attributes:
+    crs:           EPSG:32632
+    no_data_time:  ['2019-07-02', '2019-07-03', '2019-07-05', '2019-07-06', '...
+
+ending

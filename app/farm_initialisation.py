@@ -624,32 +624,54 @@ def sync_farms(
           if "full" in photosynthesis.mean:
             fapar_full_ds = fapar_dc["full"].copy()  # pyright: ignore
             times = fapar_full_ds.time.values
-      
+
 
       # Align crop_names_ts dates to the dates in fapar_dc (note that for all keys in fapar_dc, the dates are the same).
-      if times is not None:
-        crop_data_ts = align_crop_ts_dates_to_ds_times(df=crop_data_ts, times=times)
-        # Get PAR data (which is daily) and restrict it to the dates in fapar_dc
+      assert times is not None  # This should never be None! If its none, we are not sending anything.
 
-        with open("/data/log.txt", "a") as f:
-          f.write(f"crop_data_ts:\n{crop_data_ts}\n\n")
+      crop_data_ts = align_crop_ts_dates_to_ds_times(df=crop_data_ts, times=times)
+      # Get PAR data (which is daily) and restrict it to the dates in fapar_dc
 
-        par_df = fetch_par_polygon(
-          geom=polygon,
-          start_date=pd.to_datetime(times[0]).strftime("%Y-%m-%d"),
-          end_date=pd.to_datetime(times[-1]).strftime("%Y-%m-%d"),
-        )
-        par_df = align_crop_ts_dates_to_ds_times(df=par_df, times=times)
+      with open("/data/log.txt", "a") as f:
+        f.write(f"fapar_full_ds__1:\n{fapar_full_ds}\n\n")
 
-        # For temporial_mean and full, define photosythesis_dc[mean key thingie] as fapar_dc[mean key thingie] * par * crop_data_ts[LUA_max?]
-        if photosynthesis.mean is not None:
-          if "spatial_mean" in photosynthesis.mean:
-            fapar_spatial_mean_ds = multiply_ds_by_daily_df(ds=fapar_spatial_mean_ds, df=par_df, column_name="PAR")
-            photosynthesis_dc["spatial_mean"] = multiply_ds_by_daily_df(ds=fapar_spatial_mean_ds, df=crop_data_ts, column_name="LUEmax")
-          if "full" in photosynthesis.mean:
-            fapar_full_ds = multiply_ds_by_daily_df(ds=fapar_full_ds, df=par_df, column_name="PAR")
-            photosynthesis_dc["full"] = multiply_ds_by_daily_df(ds=fapar_full_ds, df=crop_data_ts, column_name="LUEmax")
+      par_df = fetch_par_polygon(
+        geom=polygon,
+        start_date=pd.to_datetime(times[0]).strftime("%Y-%m-%d"),
+        end_date=pd.to_datetime(times[-1]).strftime("%Y-%m-%d"),
+      )
+      par_df = align_crop_ts_dates_to_ds_times(df=par_df, times=times)
 
+      # For temporial_mean and full, define photosythesis_dc[mean key thingie] as fapar_dc[mean key thingie] * par * crop_data_ts[LUA_max?]
+      if photosynthesis.mean is not None:
+        if "spatial_mean" in photosynthesis.mean:
+          fapar_spatial_mean_ds = multiply_ds_by_daily_df(ds=fapar_spatial_mean_ds, df=par_df, column_name="PAR")
+          photosynthesis_dc["spatial_mean"] = multiply_ds_by_daily_df(ds=fapar_spatial_mean_ds, df=crop_data_ts, column_name="LUEmax")
+        if "full" in photosynthesis.mean:
+          fapar_full_ds = multiply_ds_by_daily_df(ds=fapar_full_ds, df=par_df, column_name="PAR")
+          with open("/data/log.txt", "a") as f:
+            f.write(f"starting\n")
+            f.write(f"fapar_full_ds__2:\n{fapar_full_ds}\n\n")
+          photosynthesis_xr_ds = multiply_ds_by_daily_df(ds=fapar_full_ds, df=crop_data_ts, column_name="LUEmax")
+          photosynthesis_xr_ds = photosynthesis_xr_ds.rename({"BIOPAR_fAPAR": "GPP"})
+          photosynthesis_dc["full"] = photosynthesis_xr_ds
+          with open("/data/log.txt", "a") as f:
+            f.write(f"ending\n")
+
+          # Now, make it to GeoTiff
+
+          with open("/data/log.txt", "a") as f:
+            f.write(f"starting\n")
+            f.write(f"photosynthesis_xr_ds:\n{photosynthesis_xr_ds}\n\n")
+            f.write(f"photosynthesis_dc['full']:\n{photosynthesis_dc['full']}\n\n")
+          photosynthesis_tiff_path = NetCDF_to_tiffs(
+            ds=photosynthesis_dc["full"],
+            variable_name="GPP",
+            polygon=polygon,
+            save_path=save_dir
+          )
+          with open("/data/log.txt", "a") as f:
+            f.write(f"ending\n")
 
     """ Get weather data """
     if weather_variables is not None and any(weather_variables.values()):
@@ -720,44 +742,45 @@ def sync_farms(
     output[(sector.Farm_ID, sector.Parzelle)] = dict()
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"] = dict()
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["photosynthesis"] = photosynthesis_dc
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["photosynthesis"]["tiff"] = photosynthesis_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][fapar["variable_name"]] = fapar_dc
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][fapar["variable_name"]]["tiffs"] = fapar_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][fapar["variable_name"]]["tiff"] = fapar_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][nitrogen["variable_name"]] = nitrogen_dc
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][nitrogen["variable_name"]]["tiffs"] = nitrogen_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][nitrogen["variable_name"]]["tiff"] = nitrogen_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][canopy_water["variable_name"]] = canopy_water_dc
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][canopy_water["variable_name"]]["tiffs"] = canopy_water_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][canopy_water["variable_name"]]["tiff"] = canopy_water_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][vegetation_cover["variable_name"]] = vegetation_cover_dc
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][vegetation_cover["variable_name"]]["tiffs"] = vegetation_cover_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][vegetation_cover["variable_name"]]["tiff"] = vegetation_cover_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][leaf_area["variable_name"]] = leaf_area_dc
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][leaf_area["variable_name"]]["tiffs"] = leaf_area_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][leaf_area["variable_name"]]["tiff"] = leaf_area_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["savi"] = savi_dc
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["savi"]["tiffs"] = savi_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["savi"]["tiff"] = savi_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NDVI"] = ndvi_dc
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NDVI"]["tiffs"] = ndvi_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NDVI"]["tiff"] = ndvi_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["EVI"] = evi_dc   
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["EVI"]["tiffs"] = evi_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["EVI"]["tiff"] = evi_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["EVI2"] = evi2_dc 
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["EVI2"]["tiffs"] = evi2_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["EVI2"]["tiff"] = evi2_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["GNDVI"] = gndvi_dc
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["GNDVI"]["tiffs"] = gndvi_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["GNDVI"]["tiff"] = gndvi_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["MSI"] = msi_dc
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["MSI"]["tiffs"] = msi_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["MSI"]["tiff"] = msi_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NDMI"] = ndmi_dc 
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NDMI"]["tiffs"] = ndmi_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NDMI"]["tiff"] = ndmi_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NBR"] = nbr_dc  
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NBR"]["tiffs"] = nbr_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NBR"]["tiff"] = nbr_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["PSRI"] = psri_dc 
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["PSRI"]["tiffs"] = psri_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["PSRI"]["tiff"] = psri_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["ARI"] = ari_dc  
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["ARI"]["tiffs"] = ari_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["ARI"]["tiff"] = ari_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["ARVI"] = arvi_dc 
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["ARVI"]["tiffs"] = arvi_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["ARVI"]["tiff"] = arvi_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["SIPI"] = sipi_dc 
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["SIPI"]["tiffs"] = sipi_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["SIPI"]["tiff"] = sipi_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NDYI"] = ndyi_dc 
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NDYI"]["tiffs"] = ndyi_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NDYI"]["tiff"] = ndyi_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["AGS"] = ags_dc  
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["AGS"]["tiffs"] = ags_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["AGS"]["tiff"] = ags_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][variability_map["variable_name"]] = variability_xr_ds
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["_".join(bands["variable_name"])] = bands_dc
     output[(sector.Farm_ID, sector.Parzelle)]["weather"] = weather_dc
