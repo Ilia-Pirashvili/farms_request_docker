@@ -1,4 +1,4 @@
-#!/bin/env python
+#!/bin/env pyt_newhon
 
 from typing import Optional
 import xarray as xr
@@ -101,16 +101,16 @@ def _make_AGS(
   else:
     ds = band_source.copy()
 
-  ds = AGS(ds)
-  ds = ds.to_dataset(name="AGS")
+  ds_new = AGS(ds)
+  ds_new = ds_new.to_dataset(name="AGS")
 
   if ds.attrs.get("crs") is not None:
-    ds.attrs["crs"] = ds.attrs.get("crs")
+    ds_new.attrs["crs"] = ds.attrs.get("crs")
 
   if save_path is not None:
-    sync_ds_to_NetCDF(ds=ds, NetCDF_path=save_path)
+    sync_ds_to_NetCDF(ds=ds_new, NetCDF_path=save_path)
 
-  return ds
+  return ds_new
 
 def make_composite(
   composite_name,
@@ -123,16 +123,16 @@ def make_composite(
   else:
     ds = band_source.copy()
 
-  ds = composite_rule[composite_name](ds)
-  ds = ds.to_dataset(name=composite_name)
+  ds_new = composite_rule[composite_name](ds)
+  ds_new = ds_new.to_dataset(name=composite_name)
 
   if ds.attrs.get("crs") is not None:
-    ds.attrs["crs"] = ds.attrs.get("crs")
+    ds_new.attrs["crs"] = ds.attrs.get("crs")
 
   if save_path is not None:
-    sync_ds_to_NetCDF(ds=ds, NetCDF_path=save_path)
+    sync_ds_to_NetCDF(ds=ds_new, NetCDF_path=save_path)
 
-  return ds
+  return ds_new
 
 def make_SAVI(  # Soil Adjusted Vegetation Index
   bands_source: str | xr.Dataset,

@@ -1,0 +1,67 @@
+{
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [11.354947914480557, 51.78796822768034],
+        [11.355052085519442, 51.78796822768034],
+        [11.355052085519442, 51.79015177231967],
+        [11.352947914480557, 51.79015177231967],
+        [11.352947914480557, 51.78796822768034]
+      ]
+    ]
+  },
+  "input_data": {
+    "id": {
+      "farm_id": "test_farm_id",
+      "sector_id": "test_sector_id"
+    },
+    "crop_data": [
+      {
+        "crop_name": "weizen",
+        "plant_time": "2018-01-10",
+        "harvest_time": "2018-05-10"
+      },
+      {
+        "crop_name": "kartoffeln",
+        "plant_time": "2019-01-01",
+        "harvest_time": "2019-07-10"
+      }
+    ]
+  },
+  "requests": {
+    "date_range": ["2019-07-01", "2019-07-15"],
+    "weather_data": {
+      "daily": ["rain_sum", "sunshine_duration"],
+      "hourly": ["snow_depth"]
+    },
+    "copernicus_data": {
+      "fapar": ["spatial_mean", "temporal_mean", "full"],
+      "nitrogen": ["spatial_mean", "temporal_mean"],
+      "canopy_water": ["spatial_mean", "temporal_mean"],
+      "vegetation_cover": ["spatial_mean", "temporal_mean"],
+      "leaf_area": ["spatial_mean", "temporal_mean"],
+      "bands": ["spatial_mean"],
+      "composites": {
+        "ndvi":  ["spatial_mean"],
+        "savi":  ["spatial_mean"],
+        "evi":   ["spatial_mean"],
+        "evi2":  ["spatial_mean"],
+        "gndvi": ["spatial_mean"],
+        "msi":   ["spatial_mean"],
+        "ndmi":  ["spatial_mean"],
+        "nbr":   ["spatial_mean"],
+        "psri":  ["spatial_mean"],
+        "ari":   ["spatial_mean"],
+        "arvi":  ["spatial_mean"],
+        "sipi":  ["spatial_mean"],
+        "ndyi":  ["spatial_mean"],
+        "ags":   ["spatial_mean"]
+      }
+    },
+    "photosynthesis": {
+      "interpolation": "linear",
+      "mean": ["spatial_mean", "temporal_mean", "full"]
+    }
+  }
+}

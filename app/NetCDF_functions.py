@@ -1,17 +1,19 @@
 # #!/bin/env python
 
-# from typing import Callable, Optional
 import pandas as pd
 import xarray as xr
 import numpy as np
 import os
 import pyproj
-# from pyproj import Transformer
+import rasterio
+from rasterio.transform import from_bounds
+from rasterio.features import geometry_mask
+from pyproj import CRS, Transformer
+import shapely
 from shapely.geometry import Polygon, Point
 from shapely.ops import transform as shapely_transform
 from datetime import date
-# # from numbers import Number
-# 
+
 from app.date_functions import sorted_dates, DateRange#, complement_in_date_range
 
 
@@ -322,3 +324,116 @@ def spatial_mean(ds: xr.Dataset) -> xr.Dataset:
 def temporal_mean(ds: xr.Dataset) -> xr.Dataset:
     """Compute mean across the time dimension."""
     return ds.mean(dim="time", skipna=True)
+
+def NetCDF_to_tiffs(
+    ds: xr.Dataset | str, 
+    variable_name: str, 
+    polygon: shapely.Polygon, 
+    save_path: str
+) -> list[str]:
+    """
+    Extracts timesteps from NetCDF dataset, clips to polygon, and saves as GeoTIFFs.
+    
+    Returns
+    -------
+    list[str]
+        List of full paths to all tiff files (existing and newly created)
+    """
+    # Load dataset if path is provided
+    if isinstance(ds, str):
+        ds = xr.open_dataset(ds)
+    
+    # Create save directory if it doesn't exist
+    os.makedirs(save_path, exist_ok=True)
+    
+    # Get all timestamps
+    timestamps = ds.time.values
+    
+    # Build list of all tiff file paths and check which are missing
+    all_tiff_paths = []
+    missing_indices = []
+    
+    for i, timestamp in enumerate(timestamps):
+        timestamp_str = str(timestamp).replace(':', '-')
+        output_file = os.path.join(save_path, f"{variable_name}_{timestamp_str}.tiff")
+        all_tiff_paths.append(output_file)
+        if not os.path.exists(output_file):
+            missing_indices.append(i)
+    
+    # If all files exist, return early
+    if not missing_indices:
+        return all_tiff_paths
+    
+    # Get CRS from dataset
+    dataset_crs = ds.crs
+    
+    # Reproject polygon to dataset CRS if needed
+    if dataset_crs != "EPSG:4326":
+        source_crs = CRS.from_epsg(4326)
+        target_crs = CRS.from_string(dataset_crs)
+        transformer = Transformer.from_crs(source_crs, target_crs, always_xy=True)
+        
+        polygon_coords = list(polygon.exterior.coords)
+        transformed_coords = [transformer.transform(x, y) for x, y in polygon_coords]
+        polygon = shapely.Polygon(transformed_coords)
+    
+    # Get coordinate arrays
+    x_coords = ds.x.values
+    y_coords = ds.y.values
+    
+    # Calculate transform for rasterio
+    x_res = (x_coords[-1] - x_coords[0]) / (len(x_coords) - 1)
+    y_res = (y_coords[-1] - y_coords[0]) / (len(y_coords) - 1)
+    transform = from_bounds(
+        x_coords[0] - x_res/2, 
+        min(y_coords) - abs(y_res)/2,
+        x_coords[-1] + x_res/2, 
+        max(y_coords) + abs(y_res)/2,
+        len(x_coords), 
+        len(y_coords)
+    )
+    
+    # Create mask for polygon
+    mask = geometry_mask(
+        [polygon],
+        out_shape=(len(y_coords), len(x_coords)),
+        transform=transform,
+        invert=True
+    )
+    
+    # Process missing timestamps
+    for i in missing_indices:
+        # Get data for this timestamp
+        data = ds.isel(time=i)[variable_name].values
+        
+        # Apply mask
+        masked_data = np.where(mask, data, np.nan)
+        
+        # Save as GeoTIFF
+        timestamp_str = str(timestamps[i]).replace(':', '-')
+        output_file = all_tiff_paths[i]
+        
+        with rasterio.open(
+            output_file,
+            'w',
+            driver='GTiff',
+            height=masked_data.shape[0],
+            width=masked_data.shape[1],
+            count=1,
+            dtype=masked_data.dtype,
+            crs=dataset_crs,
+            transform=transform,
+            nodata=np.nan
+        ) as dst:
+            dst.write(masked_data, 1)
+    
+    return all_tiff_paths
+
+def interpolate_ds(ds, interpolation_method="linear"):
+  daily_time = pd.date_range(
+    ds.time.min().values,
+    ds.time.max().values,
+    freq="D"
+  )
+  ds_daily = ds.interp(time=daily_time, method=interpolation_method)
+  return ds_daily

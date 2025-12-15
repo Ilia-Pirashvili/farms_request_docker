@@ -7,9 +7,22 @@ class PolygonModel(BaseModel):
   type: str
   coordinates: list
 
+class Photosynthesis(BaseModel):
+  mean: Optional[list[str]] = None
+  interpolation: Optional[str] = None
+
 class PolygonID(BaseModel):
   farm_id: Optional[str] = None
   sector_id: Optional[str] = None
+
+class CropData(BaseModel):
+  crop_name: Optional[str] = None
+  plant_time: Optional[str] = None
+  harvest_time: Optional[str] = None
+
+class InputData(BaseModel):
+  id: PolygonID
+  crop_data: Optional[list[CropData]] = None
 
 class WeatherData(BaseModel):
   daily: Optional[list[str]] = None
@@ -32,7 +45,7 @@ class CopernicusComposites(BaseModel):
   ags: Optional[list[str]] = None              # ==
 
 class CopernicusData(BaseModel):
-  photosynthesis: Optional[list[str]] = None   # All will be have mean, median, full; not bool.
+  fapar: Optional[list[str]] = None   # All will be have mean, median, full; not bool.
   nitrogen: Optional[list[str]] = None         # ==
   canopy_water: Optional[list[str]] = None     # ==
   vegetation_cover: Optional[list[str]] = None # ==
@@ -61,9 +74,10 @@ class DataRequest(BaseModel):
   weather_data: Optional[WeatherData]  = None
   copernicus_data: Optional[CopernicusData] = None
   background_data: Optional[BackgroundData] = None
+  photosynthesis: Optional[Photosynthesis] = None
 
 class JSONRequest(BaseModel):
   geometry: PolygonModel
-  id: PolygonID
+  input_data: InputData
   requests: DataRequest
   options: Optional[RequestOptions] = None

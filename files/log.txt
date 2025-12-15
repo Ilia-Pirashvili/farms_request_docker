@@ -1,0 +1,10 @@
+Start of log
+crop_data_ts:
+        date   crop_name  ...  froot_mr_base  livewood_mr_base
+0 2019-07-01  kartoffeln  ...        0.00819               0.0
+1 2019-07-02  kartoffeln  ...        0.00819               0.0
+2 2019-07-03  kartoffeln  ...        0.00819               0.0
+3 2019-07-04  kartoffeln  ...        0.00819               0.0
+
+[4 rows x 14 columns]
+

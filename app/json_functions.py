@@ -61,6 +61,14 @@ def base_dir_dict_to_local_dir(
 ) -> dict:
   for key in response:
     response[key]["satellite_img_path"] = response[key]["satellite_img_path"].replace(base_dir, local_dir)
+    for sat in response[key]["copernicus"]:
+      try:
+        tiffs = []
+        for tiff in response[key]["copernicus"][sat]["tiffs"]:
+          tiffs.append(tiff.replace(base_dir, local_dir))
+        response[key]["copernicus"][sat]["tiffs"] = tiffs
+      except:
+        pass
   return response
 
 # Convert dataset to dictionary with basic functionality, such as spatial_mean, temporial_mean etc.

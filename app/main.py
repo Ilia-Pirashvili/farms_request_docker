@@ -19,26 +19,31 @@ def ls(path: Optional[str] = None):
   elif os.path.isfile(path):
     return "File exists but is a file, not a directory."
   else:
-    return "Dude, get a working path"
+    return "Get a working path"
 
 @app.post("/request")
 def request(req: JSONRequest):
   try:
     sane_response = get(
       mapping_polygon=req.geometry.model_dump(),
-      farm_id=req.id.farm_id,
-      sector_id=req.id.sector_id,
+      farm_id=req.input_data.id.farm_id,
+      sector_id=req.input_data.id.sector_id,
       date_range=DateRange(req.requests.date_range),
       satellite_img_size=req.requests.satellite_image.max_size,
       weather_data=req.requests.weather_data,
-      copernicus_data=req.requests.copernicus_data
+      copernicus_data=req.requests.copernicus_data,
+      crop_data=req.input_data.crop_data,
+      photosynthesis=req.requests.photosynthesis
     )
     response = sane_response
-    response = base_dir_dict_to_local_dir(response)
-    if req.id.farm_id is None or req.id.sector_id is None:
+    try:
+      response = base_dir_dict_to_local_dir(response)
+    except Exception as e:
+      return {"Error": str(e)}
+    if req.input_data.id.farm_id is None or req.input_data.id.sector_id is None:
       response = response[list(response.keys())[0]]
     else:
-      response = response[((req.id.farm_id, req.id.sector_id))]
+      response = response[((req.input_data.id.farm_id, req.input_data.id.sector_id))]
     return safe_to_json(response)
   except Exception as e:
     return {"error": str(e)}

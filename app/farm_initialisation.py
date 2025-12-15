@@ -10,7 +10,7 @@ from datetime import date
 
 from typing import Optional
 
-from app.defaults                import copernicus_model_parameters
+from app.defaults                import copernicus_model_parameters, crop_to_bplut_table, bplut_table
 from app.esri_satellite_images   import sync_esri
 from app.download_copernius_data import sync_copernicus
 from app.open_meteo              import sync_weather
@@ -20,8 +20,10 @@ from app.generic_functions       import merge_dfs
 from app.pandas_functions        import save_pandas
 from app.process_copernicus_data import make_SAVI, make_NDVI, make_EVI, make_EVI2, make_GNDVI, make_MSI, make_NDMI, make_NBR, make_PSRI, make_ARI
 from app.process_copernicus_data import make_ARVI, make_SIPI, make_NDYI, make_AGS
-from app.json_requests           import CopernicusData, WeatherData
+from app.json_requests           import CopernicusData, WeatherData, CropData, Photosynthesis
 from app.json_functions          import mapping_polygon_to_farms_df, ds_to_dict_of_basic_functionality
+from app.NetCDF_functions        import NetCDF_to_tiffs, interpolate_ds
+from app.photosynthesis          import build_crop_timeseries, align_crop_ts_dates_to_ds_times, fetch_par_polygon, multiply_ds_by_daily_df
 
 user_data_path = "/data/user_data"
 generic_data_path = "/data/background_data"
@@ -35,11 +37,13 @@ def get(
   satellite_img_size: Optional[int] = 0,
   weather_data: Optional[WeatherData] = WeatherData(),
   copernicus_data: Optional[CopernicusData] = None,
+  crop_data: Optional[list[CropData]] = None,
+  photosynthesis: Optional[Photosynthesis] = None
 ) -> dict:
   """
   Helper function for the main sync_farms function.
   ---
-  Returns JSON *sic* data where possible (e.g., when returning numeric data such as photosynthesis).
+  Returns JSON data where possible (e.g., when returning numeric data such as photosynthesis).
   Examples where its not possible are satellite snapshots (images).
   TO_DO: allow data output specialisation.
   """
@@ -62,8 +66,10 @@ def get(
     satellite_img_size=satellite_img_size,
     weather_data=weather_data,
     copernicus_data=copernicus_data,
+    crop_data=crop_data,
     background_data=[],
     copernicus_model_parameters=copernicus_model_parameters,
+    photosynthesis=photosynthesis,
     save_background=False,
     copernicus_retries=1,
     read_only=False
@@ -99,8 +105,9 @@ def sync_farms(
    ## ---
   ],
   copernicus_model_parameters = copernicus_model_parameters,
+  crop_data: Optional[list[CropData]] = None,
+  photosynthesis: Optional[Photosynthesis] = None,
   save_background = True,
-#  verbose_script: bool = False,
   start_point: int = 0,
   end_point: Optional[int] = None,
   copernicus_retries: int = 0,
@@ -121,42 +128,65 @@ def sync_farms(
     date_range = DateRange(date_range)
 
   """ Define global variables """
+  # Photosynthesis_dc
+  photosynthesis_dc = dict()
+  photosynthesis_tiff_path = None
+
   # Copernicus
-  photosynthesis_dc = None
-  photosynthesis = copernicus_model_parameters["Fraction_Absorbed_Photosynthetic_Active_Radiation"]
+  fapar_dc = None
+  fapar_tiff_path = None
+  fapar = copernicus_model_parameters["Fraction_Absorbed_Photosynthetic_Active_Radiation"]
 
   nitrogen_dc = None
+  nitrogen_tiff_path = None
   nitrogen = copernicus_model_parameters["Canopy_Chlorophyll_Content"]
 
   canopy_water_dc = None
+  canopy_water_tiff_path = None
   canopy_water = copernicus_model_parameters["Canopy_Water_Content"]
 
   vegetation_cover_dc = None
+  vegetation_cover_tiff_path = None
   vegetation_cover = copernicus_model_parameters["Fraction_of_Vegetation_Coverage"]
 
   leaf_area_dc = None
+  leaf_area_tiff_path = None
   leaf_area = copernicus_model_parameters["Leaf_Area_Index"]
 
   bands_dc = None
+#  bands_tiff_path = None
   bands = copernicus_model_parameters["bands"]
 
   savi_dc  = None
+  savi_tiff_path = None
   ndvi_dc  = None
+  ndvi_tiff_path  = None
   evi_dc   = None
+  evi_tiff_path   = None
   evi2_dc  = None
+  evi2_tiff_path  = None
   gndvi_dc = None
+  gndvi_tiff_path = None
   msi_dc   = None
+  msi_tiff_path   = None
   ndmi_dc  = None
+  ndmi_tiff_path  = None
   nbr_dc   = None
+  nbr_tiff_path   = None
   psri_dc  = None
+  psri_tiff_path  = None
   ari_dc   = None
+  ari_tiff_path   = None
   arvi_dc  = None
+  arvi_tiff_path  = None
   sipi_dc  = None
+  sipi_tiff_path  = None
   ndyi_dc  = None
+  ndyi_tiff_path  = None
   ags_dc   = None
+  ags_tiff_path   = None
 
   variability_xr_ds = None
-
   variability_map = copernicus_model_parameters["Variability_map"]
 
   # So that the gdf active geometry column does not have to be called "geometry".
@@ -236,20 +266,36 @@ def sync_farms(
     """ Get satellite image """
     if satellite_img_size and satellite_img_size > 0:
       sync_esri(polygon=polygon, save_dir=save_dir, max_size=satellite_img_size)
-
+  
     """ Get sattelite land covers """
+    # I will need fapar for photosynthesis:
+    # Note that spatial_mean is not needed, I need temporal or full.
+    if photosynthesis is not None:
+      if copernicus_data is None:
+        copernicus_data = CopernicusData()
+      if copernicus_data.fapar is None:
+        copernicus_data.fapar = ["temporal_mean", "full"]
+      elif "temporal_mean" not in copernicus_data.fapar and "full" not in copernicus_data.fapar:
+        copernicus_data.fapar.extend(["temporal_mean", "full"])
+
     if copernicus_data is not None:
-      if copernicus_data.photosynthesis:
-        photosynthesis_xr_ds = sync_copernicus(
+      if copernicus_data.fapar:
+        fapar_xr_ds = sync_copernicus(
           polygon=polygon,
           date_range=date_range,
-          copernicus_model_params=photosynthesis,
-          polygon_NetCDF=f"{save_dir}/{photosynthesis['variable_name']}.nc",
+          copernicus_model_params=fapar,
+          polygon_NetCDF=f"{save_dir}/{fapar['variable_name']}.nc",
           retries=copernicus_retries,
           read_only=read_only,
           sector_name=sector.Parzelle
         )
-        photosynthesis_dc = ds_to_dict_of_basic_functionality(ds=photosynthesis_xr_ds, desired_functions=copernicus_data.photosynthesis)
+        fapar_dc = ds_to_dict_of_basic_functionality(ds=fapar_xr_ds, desired_functions=copernicus_data.fapar)
+        fapar_tiff_path = NetCDF_to_tiffs(
+          ds=fapar_xr_ds,
+          variable_name=fapar['variable_name'],
+          polygon=polygon,
+          save_path=save_dir
+        )
       if copernicus_data.nitrogen:
         nitrogen_xr_ds = sync_copernicus(
           polygon=polygon,
@@ -261,6 +307,12 @@ def sync_farms(
           sector_name=sector.Parzelle
         )
         nitrogen_dc = ds_to_dict_of_basic_functionality(ds=nitrogen_xr_ds, desired_functions=copernicus_data.nitrogen)
+        nitrogen_tiff_path = NetCDF_to_tiffs(
+          ds=nitrogen_xr_ds,
+          variable_name=nitrogen['variable_name'],
+          polygon=polygon,
+          save_path=save_dir
+        )
       if copernicus_data.vegetation_cover:
         vegetation_cover_xr_ds = sync_copernicus(
           polygon=polygon,
@@ -272,6 +324,12 @@ def sync_farms(
           sector_name=sector.Parzelle
         )
         vegetation_cover_dc = ds_to_dict_of_basic_functionality(ds=vegetation_cover_xr_ds, desired_functions=copernicus_data.vegetation_cover)
+        vegetation_cover_tiff_path = NetCDF_to_tiffs(
+          ds=vegetation_cover_xr_ds,
+          variable_name=vegetation_cover['variable_name'],
+          polygon=polygon,
+          save_path=save_dir
+        )
       if copernicus_data.leaf_area:
         leaf_area_xr_ds = sync_copernicus(
           polygon=polygon,
@@ -283,6 +341,12 @@ def sync_farms(
           sector_name=sector.Parzelle
         )
         leaf_area_dc = ds_to_dict_of_basic_functionality(ds=leaf_area_xr_ds, desired_functions=copernicus_data.leaf_area)
+        leaf_area_tiff_path = NetCDF_to_tiffs(
+          ds=leaf_area_xr_ds,
+          variable_name=leaf_area['variable_name'],
+          polygon=polygon,
+          save_path=save_dir
+        )
       if copernicus_data.canopy_water:
         canopy_water_xr_ds = sync_copernicus(
           polygon=polygon,
@@ -294,7 +358,12 @@ def sync_farms(
           sector_name=sector.Parzelle
         )
         canopy_water_dc = ds_to_dict_of_basic_functionality(ds=canopy_water_xr_ds, desired_functions=copernicus_data.canopy_water)
-
+        canopy_water_tiff_path = NetCDF_to_tiffs(
+          ds=canopy_water_xr_ds,
+          variable_name=canopy_water['variable_name'],
+          polygon=polygon,
+          save_path=save_dir
+        )
       if copernicus_data.bands:
         bands_xr_ds = sync_copernicus(
           polygon=polygon,
@@ -308,7 +377,12 @@ def sync_farms(
           sector_name=sector.Parzelle
         )
         bands_dc = ds_to_dict_of_basic_functionality(ds=bands_xr_ds, desired_functions=copernicus_data.bands)
-
+#        bands_tiff_path = NetCDF_to_tiffs(
+#          ds=bands_xr_ds,
+#          variable_name=bands['variable_name'],
+#          polygon=polygon,
+#          save_path=save_dir
+#        )
       if copernicus_data.composites:
         #  All composites are derived from bands. While not all bands are needed, just get them all since dl-time is only marginally increased like this.
         if not os.path.exists(f"{save_dir}/{'_'.join(bands['variable_name'])}.nc"):
@@ -331,6 +405,12 @@ def sync_farms(
             save_path=f"{save_dir}/SAVI.nc"
           )
           savi_dc = ds_to_dict_of_basic_functionality(ds=savi_xr_ds, desired_functions=copernicus_data.composites.savi)
+          savi_tiff_path = NetCDF_to_tiffs(
+            ds=savi_xr_ds,
+            variable_name="SAVI",
+            polygon=polygon,
+            save_path=save_dir
+          )
 
         if copernicus_data.composites.ndvi:
           ndvi_xr_ds = make_NDVI(
@@ -338,55 +418,96 @@ def sync_farms(
             save_path=f"{save_dir}/ndvi.nc"
           )
           ndvi_dc = ds_to_dict_of_basic_functionality(ds=ndvi_xr_ds, desired_functions=copernicus_data.composites.ndvi)
-
+          ndvi_tiff_path = NetCDF_to_tiffs(
+            ds=ndvi_xr_ds,
+            variable_name="NDVI",
+            polygon=polygon,
+            save_path=save_dir
+          )
         if copernicus_data.composites.evi:
           evi_xr_ds = make_EVI(
             bands_source=f"{save_dir}/{'_'.join(bands['variable_name'])}.nc",
             save_path=f"{save_dir}/evi.nc"
           )
           evi_dc = ds_to_dict_of_basic_functionality(ds=evi_xr_ds, desired_functions=copernicus_data.composites.evi)
-
+          evi_tiff_path = NetCDF_to_tiffs(
+            ds=evi_xr_ds,
+            variable_name="EVI",
+            polygon=polygon,
+            save_path=save_dir
+          )
         if copernicus_data.composites.evi2:
           evi2_xr_ds = make_EVI2(
             bands_source=f"{save_dir}/{'_'.join(bands['variable_name'])}.nc",
             save_path=f"{save_dir}/evi2.nc"
           )
           evi2_dc = ds_to_dict_of_basic_functionality(ds=evi2_xr_ds, desired_functions=copernicus_data.composites.evi2)
-
+          evi2_tiff_path = NetCDF_to_tiffs(
+            ds=evi2_xr_ds,
+            variable_name="EVI2",
+            polygon=polygon,
+            save_path=save_dir
+          )
         if copernicus_data.composites.gndvi:
           gndvi_xr_ds = make_GNDVI(
             bands_source=f"{save_dir}/{'_'.join(bands['variable_name'])}.nc",
             save_path=f"{save_dir}/gndvi.nc"
           )
           gndvi_dc = ds_to_dict_of_basic_functionality(ds=gndvi_xr_ds, desired_functions=copernicus_data.composites.gndvi)
-
+          gndvi_tiff_path = NetCDF_to_tiffs(
+            ds=gndvi_xr_ds,
+            variable_name="GNDVI",
+            polygon=polygon,
+            save_path=save_dir
+          )
         if copernicus_data.composites.msi:
           msi_xr_ds = make_MSI(
             bands_source=f"{save_dir}/{'_'.join(bands['variable_name'])}.nc",
             save_path=f"{save_dir}/msi.nc"
           )
           msi_dc = ds_to_dict_of_basic_functionality(ds=msi_xr_ds, desired_functions=copernicus_data.composites.msi)
-
+          msi_tiff_path = NetCDF_to_tiffs(
+            ds=msi_xr_ds,
+            variable_name="MSI",
+            polygon=polygon,
+            save_path=save_dir
+          )
         if copernicus_data.composites.ndmi:
           ndmi_xr_ds = make_NDMI(
             bands_source=f"{save_dir}/{'_'.join(bands['variable_name'])}.nc",
             save_path=f"{save_dir}/ndmi.nc"
           )
           ndmi_dc = ds_to_dict_of_basic_functionality(ds=ndmi_xr_ds, desired_functions=copernicus_data.composites.ndmi)
-
+          ndmi_tiff_path = NetCDF_to_tiffs(
+            ds=ndmi_xr_ds,
+            variable_name="NDMI",
+            polygon=polygon,
+            save_path=save_dir
+          )
         if copernicus_data.composites.nbr:
           nbr_xr_ds = make_NBR(
             bands_source=f"{save_dir}/{'_'.join(bands['variable_name'])}.nc",
             save_path=f"{save_dir}/nbr.nc"
           )
           nbr_dc = ds_to_dict_of_basic_functionality(ds=nbr_xr_ds, desired_functions=copernicus_data.composites.nbr)
-
+          nbr_tiff_path = NetCDF_to_tiffs(
+            ds=nbr_xr_ds,
+            variable_name="NBR",
+            polygon=polygon,
+            save_path=save_dir
+          )
         if copernicus_data.composites.psri:
           psri_xr_ds = make_PSRI(
             bands_source=f"{save_dir}/{'_'.join(bands['variable_name'])}.nc",
             save_path=f"{save_dir}/psri.nc"
           )
           psri_dc = ds_to_dict_of_basic_functionality(ds=psri_xr_ds, desired_functions=copernicus_data.composites.psri)
+          psri_tiff_path = NetCDF_to_tiffs(
+            ds=psri_xr_ds,
+            variable_name="PSRI",
+            polygon=polygon,
+            save_path=save_dir
+          )
 
         if copernicus_data.composites.ari:
           ari_xr_ds = make_ARI(
@@ -394,13 +515,24 @@ def sync_farms(
             save_path=f"{save_dir}/ari.nc"
           )
           ari_dc = ds_to_dict_of_basic_functionality(ds=ari_xr_ds, desired_functions=copernicus_data.composites.ari)
-
+          ari_tiff_path = NetCDF_to_tiffs(
+            ds=ari_xr_ds,
+            variable_name="ARI",
+            polygon=polygon,
+            save_path=save_dir
+          )
         if copernicus_data.composites.arvi:
           arvi_xr_ds = make_ARVI(
             bands_source=f"{save_dir}/{'_'.join(bands['variable_name'])}.nc",
             save_path=f"{save_dir}/arvi.nc"
           )
           arvi_dc = ds_to_dict_of_basic_functionality(ds=arvi_xr_ds, desired_functions=copernicus_data.composites.arvi)
+          arvi_tiff_path = NetCDF_to_tiffs(
+            ds=arvi_xr_ds,
+            variable_name="ARVI",
+            polygon=polygon,
+            save_path=save_dir
+          )
 
         if copernicus_data.composites.sipi:
           sipi_xr_ds = make_SIPI(
@@ -408,22 +540,36 @@ def sync_farms(
             save_path=f"{save_dir}/sipi.nc"
           )
           sipi_dc = ds_to_dict_of_basic_functionality(ds=sipi_xr_ds, desired_functions=copernicus_data.composites.sipi)
-
+          sipi_tiff_path = NetCDF_to_tiffs(
+            ds=sipi_xr_ds,
+            variable_name="SIPI",
+            polygon=polygon,
+            save_path=save_dir
+          )
         if copernicus_data.composites.ndyi:
           ndyi_xr_ds = make_NDYI(
             bands_source=f"{save_dir}/{'_'.join(bands['variable_name'])}.nc",
             save_path=f"{save_dir}/ndyi.nc"
           )
           ndyi_dc = ds_to_dict_of_basic_functionality(ds=ndyi_xr_ds, desired_functions=copernicus_data.composites.ndyi)
-
+          ndyi_tiff_path = NetCDF_to_tiffs(
+            ds=ndyi_xr_ds,
+            variable_name="NDYI",
+            polygon=polygon,
+            save_path=save_dir
+          )
         if copernicus_data.composites.ags:
           ags_xr_ds = make_AGS(
             bands_source=f"{save_dir}/{'_'.join(bands['variable_name'])}.nc",
             save_path=f"{save_dir}/ags.nc"
           )
           ags_dc = ds_to_dict_of_basic_functionality(ds=ags_xr_ds, desired_functions=copernicus_data.composites.ags)
-
-
+          ags_tiff_path = NetCDF_to_tiffs(
+            ds=ags_xr_ds,
+            variable_name="AGS",
+            polygon=polygon,
+            save_path=save_dir
+          )
 ##     if (isinstance(copernicus_data, list) and "variability_map" in copernicus_data) or (isinstance(copernicus_data, str) and copernicus_data == "all"):
 ##       variability_xr_ds = sync_copernicus(
 ##         polygon=polygon,
@@ -440,6 +586,69 @@ def sync_farms(
 ##     Since in my use case this is not relevant yet, I am effectively dissabling it.
 ##     """
 
+    """ Photosynthesis """
+    with open("/data/log.txt", "w") as f:
+      f.write(f"Start of log\n")
+
+    if photosynthesis is not None:
+      crop_names_ts = build_crop_timeseries(
+        crop_data=crop_data,
+        default_crop_name=crop_to_bplut_table["missing_data"],
+        min_days=crop_to_bplut_table["inactive_days_before_fallback_to_missing_data"]
+      )
+
+      # Define crop_data_ts from crop_names_ts using the LEA?? data
+      crop_data_ts = crop_names_ts.copy()
+      for key in bplut_table["__keys"].keys():
+
+        crop_data_ts[key] = crop_data_ts["crop_name"].apply(lambda x: bplut_table[crop_to_bplut_table[x]][key])
+
+      # Interpolate everything to daily data, if interpolation is not None, else leave as it is
+      fapar_spatial_mean_ds = None
+      fapar_full_ds = None
+      times = None
+      if photosynthesis.interpolation is not None:
+        if photosynthesis.mean is not None:
+          if "spatial_mean" in photosynthesis.mean:
+            fapar_spatial_mean_ds = interpolate_ds(ds=fapar_dc["spatial_mean"], interpolation_method=photosynthesis.interpolation)  # pyright: ignore
+            times = fapar_spatial_mean_ds.time.values
+          if "full" in photosynthesis.mean:
+            fapar_full_ds = interpolate_ds(ds=fapar_dc["full"], interpolation_method=photosynthesis.interpolation)  # pyright: ignore
+            times = fapar_full_ds.time.values
+
+      else:
+        if photosynthesis.mean is not None:
+          if "spatial_mean" in photosynthesis.mean:
+            fapar_spatial_mean_ds = fapar_dc["spatial_mean"].copy()  # pyright: ignore
+            times = fapar_spatial_mean_ds.time.values
+          if "full" in photosynthesis.mean:
+            fapar_full_ds = fapar_dc["full"].copy()  # pyright: ignore
+            times = fapar_full_ds.time.values
+      
+
+      # Align crop_names_ts dates to the dates in fapar_dc (note that for all keys in fapar_dc, the dates are the same).
+      if times is not None:
+        crop_data_ts = align_crop_ts_dates_to_ds_times(df=crop_data_ts, times=times)
+        # Get PAR data (which is daily) and restrict it to the dates in fapar_dc
+
+        with open("/data/log.txt", "a") as f:
+          f.write(f"crop_data_ts:\n{crop_data_ts}\n\n")
+
+        par_df = fetch_par_polygon(
+          geom=polygon,
+          start_date=pd.to_datetime(times[0]).strftime("%Y-%m-%d"),
+          end_date=pd.to_datetime(times[-1]).strftime("%Y-%m-%d"),
+        )
+        par_df = align_crop_ts_dates_to_ds_times(df=par_df, times=times)
+
+        # For temporial_mean and full, define photosythesis_dc[mean key thingie] as fapar_dc[mean key thingie] * par * crop_data_ts[LUA_max?]
+        if photosynthesis.mean is not None:
+          if "spatial_mean" in photosynthesis.mean:
+            fapar_spatial_mean_ds = multiply_ds_by_daily_df(ds=fapar_spatial_mean_ds, df=par_df, column_name="PAR")
+            photosynthesis_dc["spatial_mean"] = multiply_ds_by_daily_df(ds=fapar_spatial_mean_ds, df=crop_data_ts, column_name="LUEmax")
+          if "full" in photosynthesis.mean:
+            fapar_full_ds = multiply_ds_by_daily_df(ds=fapar_full_ds, df=par_df, column_name="PAR")
+            photosynthesis_dc["full"] = multiply_ds_by_daily_df(ds=fapar_full_ds, df=crop_data_ts, column_name="LUEmax")
 
 
     """ Get weather data """
@@ -510,33 +719,50 @@ def sync_farms(
     """ Combine derived data into a single dictionary, which will then be returned """
     output[(sector.Farm_ID, sector.Parzelle)] = dict()
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"] = dict()
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][photosynthesis["variable_name"]] = photosynthesis_dc
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["photosynthesis"] = photosynthesis_dc
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][fapar["variable_name"]] = fapar_dc
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][fapar["variable_name"]]["tiffs"] = fapar_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][nitrogen["variable_name"]] = nitrogen_dc
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][nitrogen["variable_name"]]["tiffs"] = nitrogen_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][canopy_water["variable_name"]] = canopy_water_dc
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][canopy_water["variable_name"]]["tiffs"] = canopy_water_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][vegetation_cover["variable_name"]] = vegetation_cover_dc
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][vegetation_cover["variable_name"]]["tiffs"] = vegetation_cover_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][leaf_area["variable_name"]] = leaf_area_dc
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][leaf_area["variable_name"]]["tiffs"] = leaf_area_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["savi"] = savi_dc
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["savi"]["tiffs"] = savi_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NDVI"] = ndvi_dc
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NDVI"]["tiffs"] = ndvi_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["EVI"] = evi_dc   
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["EVI"]["tiffs"] = evi_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["EVI2"] = evi2_dc 
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["EVI2"]["tiffs"] = evi2_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["GNDVI"] = gndvi_dc
-    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["MSI"] = msi_dc  
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["GNDVI"]["tiffs"] = gndvi_tiff_path
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["MSI"] = msi_dc
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["MSI"]["tiffs"] = msi_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NDMI"] = ndmi_dc 
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NDMI"]["tiffs"] = ndmi_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NBR"] = nbr_dc  
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NBR"]["tiffs"] = nbr_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["PSRI"] = psri_dc 
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["PSRI"]["tiffs"] = psri_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["ARI"] = ari_dc  
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["ARI"]["tiffs"] = ari_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["ARVI"] = arvi_dc 
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["ARVI"]["tiffs"] = arvi_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["SIPI"] = sipi_dc 
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["SIPI"]["tiffs"] = sipi_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NDYI"] = ndyi_dc 
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["NDYI"]["tiffs"] = ndyi_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["AGS"] = ags_dc  
+    output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["AGS"]["tiffs"] = ags_tiff_path
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"][variability_map["variable_name"]] = variability_xr_ds
     output[(sector.Farm_ID, sector.Parzelle)]["copernicus"]["_".join(bands["variable_name"])] = bands_dc
     output[(sector.Farm_ID, sector.Parzelle)]["weather"] = weather_dc
     output[(sector.Farm_ID, sector.Parzelle)]["background"] = bg_df
     output[(sector.Farm_ID, sector.Parzelle)]["satellite_img_path"] = os.path.join(save_dir, "satellite_image.png")
-#     """DELETE !!!!!!!!!!!!!!! """
-#     if bands_xr_ds.to_dataframe().empty:
-#       return
 
     if idx % 200 == -1 % 200:
       print(f"{idx + 1} sectors finished.")
